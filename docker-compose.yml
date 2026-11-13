@@ -1,0 +1,41 @@
+services:
+  sim:
+    build: .
+    environment:
+      CONFIG: ${CONFIG:-configs/default.yaml}
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - ./results:/app/results
+      - ./configs:/app/configs:ro
+      - hf_cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  smoke:
+    extends:
+      service: sim
+    environment:
+      CONFIG: configs/smoke.yaml
+    command: ["run", "--config", "configs/smoke.yaml"]
+
+  bench:
+    extends:
+      service: sim
+    environment:
+      CONFIG: configs/default.yaml
+    command: ["sweep", "--config", "configs/default.yaml"]
+
+  plots:
+    build: .
+    profiles: ["plots"]
+    volumes:
+      - ./results:/app/results
+    command: ["plot", "--results", "results"]
+
+volumes:
+  hf_cache:

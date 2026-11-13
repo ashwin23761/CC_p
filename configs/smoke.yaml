@@ -1,0 +1,40 @@
+model:
+  name: Qwen/Qwen2.5-0.5B-Instruct
+  dtype: float16
+  max_seq_len: 512
+  trust_remote_code: false
+runtime:
+  device: auto
+  max_running: 2
+  warmup_iterations: 2
+  output_dir: results
+workload:
+  mode: burst
+  arrival_rate: 1.0
+  request_count: 4
+  prompt_distribution: fixed
+  prompt_length: 64
+  output_length: 8
+  min_prompt_length: 64
+  max_prompt_length: 64
+  short_prompt_min: 64
+  short_prompt_max: 64
+  long_prompt_min: 64
+  long_prompt_max: 64
+  short_prompt_probability: 1.0
+  seed: 7
+  corpus:
+    - "A small reproducible test checks model execution and scheduling."
+scheduler:
+  mode: compare
+  chunk_size: 64
+  chunk_sizes: [64]
+  token_budget: null
+sweep:
+  seeds: [7]
+  arrival_rates: [1.0]
+  prompt_lengths: [64]
+  max_running_values: [2]
+  request_count: 4
+  fixed_arrival_rate: 1.0
+  burst_request_count: 4

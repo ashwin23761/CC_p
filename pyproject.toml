@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chunked-prefill-sim"
+version = "0.1.0"
+description = "Real-model benchmark for normal and chunked LLM prefill scheduling"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "transformers==4.46.3",
+  "accelerate>=1.1,<2",
+  "numpy>=1.26,<3",
+  "pandas>=2.2,<3",
+  "matplotlib>=3.9,<4",
+  "PyYAML>=6,<7",
+]
+
+[project.scripts]
+cpsim = "cpsim.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

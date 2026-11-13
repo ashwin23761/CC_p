@@ -5,7 +5,6 @@ __pycache__/
 venv/
 .tmp/
 .hf_cache/
-results/*
 !results/.gitkeep
 *.egg-info/
 .DS_Store

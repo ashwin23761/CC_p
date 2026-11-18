@@ -38,18 +38,31 @@ def generate_plots(results_dir: Path) -> list[Path]:
         ignore_index=True,
     )
     results_dir.mkdir(parents=True, exist_ok=True)
+    # Rate plots are specifically the E1 comparison. Pooling E1-E5 by arrival
+    # rate confounds different prompt lengths, workloads, and concurrency caps.
+    rate_summaries = _experiment(summaries, "E1")
+    chunk_summaries = _experiment(summaries, "E2")
+    e1_runs = set(rate_summaries.get("run", pd.Series(dtype=str)))
+    e1_requests = requests[requests["run"].isin(e1_runs)] if e1_runs else requests
     generated = [
-        _ttft_cdf(requests, results_dir),
-        _latency_vs_rate(summaries, results_dir, "p50_ttft", "p99_ttft", "TTFT vs arrival rate", "ttft_vs_rate.png"),
-        _latency_vs_rate(summaries, results_dir, "p99_itl", None, "p99 inter-token latency vs arrival rate", "itl_p99_vs_rate.png"),
-        _throughput_vs_rate(summaries, results_dir),
-        _chunk_tradeoff(summaries, results_dir),
+        _ttft_cdf(e1_requests, results_dir),
+        _latency_vs_rate(rate_summaries, results_dir, "p50_ttft", "p99_ttft", "E1: TTFT vs arrival rate", "ttft_vs_rate.png"),
+        _latency_vs_rate(rate_summaries, results_dir, "p99_itl", None, "E1: p99 inter-token latency vs arrival rate", "itl_p99_vs_rate.png"),
+        _throughput_vs_rate(rate_summaries, results_dir),
+        _chunk_tradeoff(chunk_summaries, results_dir),
         _iteration_timeline(iterations, results_dir),
-        _token_timeline(requests, results_dir),
+        _token_timeline(e1_requests, results_dir),
     ]
     _write_measured_summary(summaries, results_dir)
     _write_comparison_summary(summaries, results_dir)
     return generated
+
+
+def _experiment(frame: pd.DataFrame, name: str) -> pd.DataFrame:
+    """Select one experiment while retaining compatibility with older summaries."""
+    if "experiment" not in frame.columns:
+        return frame
+    return frame[frame["experiment"].astype(str).eq(name)].copy()
 
 
 def _policy_label(frame: pd.DataFrame) -> pd.Series:
@@ -87,19 +100,38 @@ def _latency_vs_rate(
     if "arrival_rate" not in frame.columns:
         frame["arrival_rate"] = 0.0
     frame["policy"] = _policy_label(frame)
-    grouped = frame.groupby(["policy", "arrival_rate"], dropna=False)[first_metric].median()
-    for policy, values in grouped.groupby(level=0):
-        x = values.index.get_level_values(1).astype(float)
-        axis.plot(x, values.to_numpy(), marker="o", label=f"{policy} {first_metric}")
+    seed_key = "seed" if "seed" in frame.columns else None
+    keys = ["policy", "arrival_rate"] + ([seed_key] if seed_key else [])
+    grouped = frame.groupby(keys, dropna=False)[first_metric].median().reset_index()
+    _plot_seed_series(axis, grouped, first_metric)
     if second_metric:
-        grouped = frame.groupby(["policy", "arrival_rate"], dropna=False)[second_metric].median()
-        for policy, values in grouped.groupby(level=0):
-            x = values.index.get_level_values(1).astype(float)
-            axis.plot(x, values.to_numpy(), marker="x", linestyle="--", label=f"{policy} {second_metric}")
+        grouped = frame.groupby(keys, dropna=False)[second_metric].median().reset_index()
+        _plot_seed_series(axis, grouped, second_metric, marker="x", linestyle="--")
     axis.set(xlabel="Arrival rate (requests/s)", ylabel="Latency (seconds)", title=title)
     axis.grid(alpha=0.25)
     axis.legend(fontsize="small")
     return _save(fig, output / filename)
+
+
+def _plot_seed_series(
+    axis: plt.Axes,
+    grouped: pd.DataFrame,
+    metric: str,
+    marker: str = "o",
+    linestyle: str = "-",
+) -> None:
+    keys = ["policy"] + (["seed"] if "seed" in grouped.columns else [])
+    for key, values in grouped.groupby(keys, dropna=False, sort=True):
+        if not isinstance(key, tuple):
+            key = (key,)
+        label = " / ".join(str(value) for value in key)
+        axis.plot(
+            pd.to_numeric(values["arrival_rate"]),
+            values[metric],
+            marker=marker,
+            linestyle=linestyle,
+            label=f"{label} {metric}",
+        )
 
 
 def _throughput_vs_rate(summaries: pd.DataFrame, output: Path) -> Path:
@@ -108,9 +140,12 @@ def _throughput_vs_rate(summaries: pd.DataFrame, output: Path) -> Path:
     if "arrival_rate" not in frame.columns:
         frame["arrival_rate"] = 0.0
     frame["policy"] = _policy_label(frame)
-    for policy, group in frame.groupby("policy"):
+    keys = ["policy"] + (["seed"] if "seed" in frame.columns else [])
+    for key, group in frame.groupby(keys, dropna=False, sort=True):
+        if not isinstance(key, tuple):
+            key = (key,)
         grouped = group.groupby("arrival_rate")["output_tokens_per_second"].median()
-        axis.plot(grouped.index, grouped.values, marker="o", label=policy)
+        axis.plot(grouped.index, grouped.values, marker="o", label=" / ".join(map(str, key)))
     axis.set(
         xlabel="Arrival rate (requests/s)",
         ylabel="Generated output tokens/s",
@@ -135,9 +170,13 @@ def _chunk_tradeoff(summaries: pd.DataFrame, output: Path) -> Path:
             axis.set_axis_off()
     else:
         for axis, (column, label) in zip(axes, metrics, strict=True):
-            for policy, group in frame.groupby("scheduler"):
+            frame["chunk_size"] = pd.to_numeric(frame["chunk_size"], errors="coerce")
+            keys = ["scheduler"] + (["seed"] if "seed" in frame.columns else [])
+            for key, group in frame.groupby(keys, dropna=False, sort=True):
+                if not isinstance(key, tuple):
+                    key = (key,)
                 points = group.groupby("chunk_size")[column].median().sort_index()
-                axis.plot(points.index, points.values, marker="o", label=policy)
+                axis.plot(points.index, points.values, marker="o", label=" / ".join(map(str, key)))
             axis.set(xlabel="Prefill chunk size (tokens)", ylabel=label)
             axis.grid(alpha=0.25)
             axis.legend(fontsize="small")
@@ -147,8 +186,13 @@ def _chunk_tradeoff(summaries: pd.DataFrame, output: Path) -> Path:
 
 def _iteration_timeline(iterations: pd.DataFrame, output: Path) -> Path:
     fig, axis = plt.subplots(figsize=(9, 5))
-    grouped = list(iterations.groupby("run"))
-    for run, frame in grouped[:8]:
+    e1 = iterations[iterations["run"].astype(str).str.startswith("E1-")]
+    grouped = list(e1.groupby("run", sort=True))
+    # Show one matched normal/chunked pair at the lowest E1 rate, so the
+    # iteration traces remain readable and represent the same workload.
+    representative_runs = [run for run, _ in grouped if "rate0.5-seed11" in run][:2]
+    chosen = [(run, frame) for run, frame in grouped if run in representative_runs]
+    for run, frame in chosen:
         axis.plot(frame["iteration_id"], frame["duration"], marker=".", linewidth=1, label=run)
     axis.set(
         xlabel="Iteration",
@@ -156,8 +200,8 @@ def _iteration_timeline(iterations: pd.DataFrame, output: Path) -> Path:
         title="Iteration duration and token composition",
     )
     axis.grid(alpha=0.25)
-    if grouped:
-        representative = grouped[0][1]
+    if chosen:
+        representative = chosen[0][1]
         token_axis = axis.twinx()
         token_axis.bar(
             representative["iteration_id"],
@@ -183,7 +227,12 @@ def _iteration_timeline(iterations: pd.DataFrame, output: Path) -> Path:
 
 def _token_timeline(requests: pd.DataFrame, output: Path) -> Path:
     fig, axis = plt.subplots(figsize=(9, 5))
-    selected = requests.groupby("run", sort=False).head(2)
+    # Keep only the same matched E1 pair used by the iteration plot.
+    selected_runs = sorted(
+        run for run in requests["run"].dropna().unique()
+        if "rate0.5-seed11" in str(run)
+    )[:2]
+    selected = requests[requests["run"].isin(selected_runs)].groupby("run", sort=True).head(2)
     for _, row in selected.iterrows():
         try:
             token_times = json.loads(row["token_times"])

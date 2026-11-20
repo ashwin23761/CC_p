@@ -1,6 +1,6 @@
 # Chunked Prefill Simulator
 
-A real-model serving benchmark comparing prefill-prioritized scheduling with chunked prefill and decode-maximal batching. It uses Hugging Face model weights, a small custom inference loop, per-request KV caches, and wall-clock measurements from the selected device. It does **not** substitute synthetic latencies or call `model.generate()`.
+This benchmark runs Qwen2.5-0.5B-Instruct on a local GPU and measures how quickly requests start and how smoothly their answers stream. Hugging Face supplies the weights and tokenizer. The project's own PyTorch forward pass processes prompts and generates tokens locally. The default comparison runs the same requests through two schedulers.
 
 The implementation follows the chunked-prefill approach described in [SARATHI](https://arxiv.org/abs/2308.16369). This project is a small single-GPU experiment, not a reproduction of the paper's hardware or model scale.
 
@@ -25,6 +25,14 @@ Simulator --> requests.csv, iterations.csv, summary.csv
 ```
 
 The custom runner targets Hugging Face Llama/Qwen2-style causal models. It batches projections and MLPs across segments but runs attention separately per sequence, which keeps the cache and causal-mask logic explicit.
+
+## How requests arrive
+
+**Prefill** is the work of reading a prompt and producing its first output token. **Decode** generates the rest of the answer one token at a time. Normal prefill gives a newly admitted prompt a whole iteration, so existing answers can pause. The adaptive scheduler, named `chunked` in the graphs, reads the whole remaining prompt when nobody is decoding. When another answer is streaming, it processes up to 256 prompt tokens alongside one output step for each active stream under the default settings.
+
+The benchmark itself submits requests. In the arrival-rate experiment, they arrive at random times independently of when previous answers finish. At 4 requests/s, an average of four prompts arrive each second. Up to four requests can be active in this experiment, and additional requests wait in a queue. Each scheduler receives the same prompts, arrival times, and output lengths for a given seed. In the burst experiment all requests arrive together.
+
+**For one person waiting for each answer to finish**, the next prompt arrives with no answer streaming. Both schedulers then use a whole-prompt pass under the default token budget. To measure an isolated prompt, use `run` with `workload.request_count: 1` in a copy of the config. Setting `max_running: 1` alone still allows requests to arrive and wait in the queue.
 
 ## Run natively on Windows (no Docker)
 
@@ -58,7 +66,7 @@ This project can run directly in Windows PowerShell; Docker and WSL2 are not req
 
    Continue only if `CUDA available: True` and the expected GPU is printed.
 
-4. Run the short smoke test, then the benchmark:
+4. Use the smoke command for a fast functional check. Use the sweep command for the full performance comparison.
 
    ```powershell
    python -m cpsim.cli run --config configs/smoke.yaml --device cuda
@@ -158,7 +166,35 @@ The equivalence gate should pass before interpreting benchmark outputs. GPU fp16
 
 ## Results
 
-No sample performance numbers are checked in: latency and throughput are hardware- and model-dependent, and must come from an actual execution. A successful `run` generates all seven charts below, plus `measured_summary.md`; `sweep` populates E1-E5 with measurements from the configured seeds.
+The saved full sweep contains **93 policy runs** across three seeds (11, 23, and 37). Each run has 12 requests with 32 generated tokens each, except the burst runs, which have 16 requests. E1 varies arrival rate, E2 varies chunk size, E3 varies prompt length, E4 varies the active-request limit, and E5 sends a burst. [Configuration](configs/default.yaml) · [Measured results](results/measured_summary.md)
+
+### What changed for someone waiting for an answer?
+
+At **4 arriving requests/s** on the mixed-prompt workload, both schedulers took about nine seconds to start the typical answer and generated about 14 output tokens/s overall. The biggest difference was how long an already-streaming answer could pause. Each range below spans the three seeds. [Paired runs](results/comparison_summary.md)
+
+| E1 at 4 requests/s | Normal | Adaptive, 256-token chunks |
+|---|---:|---:|
+| Median time from arrival to first token (TTFT) | 8.63–9.10 s | 8.61–9.08 s |
+| 99th percentile gap between consecutive output tokens (p99 ITL) | 1.08–1.23 s | 0.33–0.35 s |
+| Generated output tokens/s across all requests | 13.85–14.27 | 14.00–14.37 |
+
+Long prompts made the trade-off clearer. With **3,072-token prompts** in E3, normal prefill started the median answer about one second sooner in each matched run. Adaptive prefill reduced the p99 pause during generation from about **6.27 s to 0.46 s**. These measurements include overlapping requests. [Prompt-length results](results/measured_summary.md)
+
+### Why the scheduler skips chunks when no one is decoding
+
+A separate RTX 4050 Laptop GPU run compared the earlier fixed-chunk policy with the adaptive scheduler on the same twelve 3,072-token prompts (seed 11). The first request had no other stream to serve. Processing its prompt in one pass reduced its first-token wait from **3.29 s to 3.10 s** at the 256 setting. The table shows measurements across all twelve requests in that run.
+
+| Scheduler | Median TTFT | p99 token gap | Output tokens/s |
+|---|---:|---:|---:|
+| [Fixed chunks, 256](benchmarks/adaptive-seed11/fixed256/summary.csv) | 28.00 s | 0.514 s | 5.15 |
+| [Adaptive, 256](benchmarks/adaptive-seed11/adaptive256/summary.csv) | 27.78 s | 0.515 s | 5.17 |
+| [Adaptive, 512](benchmarks/adaptive-seed11/adaptive512/summary.csv) | 23.75 s | 0.723 s | 5.68 |
+
+In this one-seed comparison, increasing the mixed-batch chunk size to 512 lowered the median first-token wait and increased the p99 gap between tokens. The default mixed-batch chunk size is 256.
+
+### Reading the graphs
+
+The TTFT CDF shows the fraction of requests that had started answering by a given time. The next three plots show how first-token waits, long streaming pauses, and total output rate changed as requests arrived more frequently.
 
 ![TTFT CDF](results/ttft_cdf.png)
 
@@ -167,6 +203,8 @@ No sample performance numbers are checked in: latency and throughput are hardwar
 ![p99 inter-token latency vs arrival rate](results/itl_p99_vs_rate.png)
 
 ![Output throughput vs arrival rate](results/throughput_vs_rate.png)
+
+The chunk-size sweep shows the trade-off between starting a new answer promptly and keeping existing answers moving. The two timelines below it show a single matched workload at 0.5 requests/s (seed 11). A steep jump between adjacent points in the token timeline means that request waited longer for its next token.
 
 ![Chunk-size trade-offs](results/chunk_size_tradeoff.png)
 

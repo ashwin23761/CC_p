@@ -1,4 +1,4 @@
-# Chunked Prefill Simulator: Implementation Plan (for Codex)
+# Chunked Prefill Simulator: Implementation Plan ()
 
 ## 0. Goal
 Build a **real-LLM serving benchmark** (no hard-coded or synthetic latencies) that compares:

@@ -13,7 +13,7 @@ Workload generator -- tokenizer --> timestamped requests
     |
 Scheduler
     |-- Normal: whole prompt OR all active decodes per iteration
-    `-- Chunked: one prompt chunk + every active decode
+    `-- Chunked: whole remaining prompt when no decodes are active, otherwise one chunk + every active decode
     |
 ModelRunner
     |-- shared token embedding / QKV / MLP projections
@@ -140,7 +140,7 @@ By default, `--device cpu` selects the local `tiny-random` model and float32. To
 | `workload.prompt_distribution` | `fixed`, `uniform`, `mixed` | Prompt length sampling policy. |
 | `workload.output_length` | token count | Fixed forced output length; EOS is intentionally ignored for comparability. |
 | `scheduler.mode` | `normal`, `chunked`, `compare` | Run one policy or both. |
-| `scheduler.chunk_size` | token count | Maximum prompt tokens in each chunked iteration. |
+| `scheduler.chunk_size` | token count | Maximum prompt tokens per iteration when decodes are active. With no active decodes, the scheduler processes the remaining prompt up to the configured token budget and sequence limit. |
 | `scheduler.token_budget` | integer or `null` | Optional total iteration-token cap, including active decode tokens. |
 | `sweep.*` | lists/counts | Seeds and parameter values for E1-E5. |
 

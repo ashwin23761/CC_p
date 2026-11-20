@@ -40,13 +40,10 @@ def test_chunked_scheduler_piggybacks_all_decodes_with_one_bounded_chunk() -> No
     second = _request("second", 9)
     scheduler.enqueue(first)
     batch = scheduler.next_batch()
-    assert len(batch) == 1 and len(batch[0].token_ids) == 4
-    first.prompt_cursor = 4
+    assert len(batch) == 1 and batch[0].token_ids == first.prompt_ids
+    assert batch[0].emits_logits
+    first.prompt_cursor = len(first.prompt_ids)
     scheduler.enqueue(second)
-    batch = scheduler.next_batch()
-    assert len(batch) == 1
-    assert batch[0].request is first
-    assert len(batch[0].token_ids) == 4
 
     first.state = RequestState.DECODING
     first.output_ids.append(100)
@@ -56,7 +53,15 @@ def test_chunked_scheduler_piggybacks_all_decodes_with_one_bounded_chunk() -> No
     prefill = next(segment for segment in batch if segment.kind == "prefill")
     assert decode.request is first
     assert prefill.request is second
-    assert len(prefill.token_ids) <= 4
+    assert prefill.token_ids == second.prompt_ids[:4]
+    assert not prefill.emits_logits
+
+    second.prompt_cursor = 4
+    scheduler.request_finished(first)
+    remainder, = scheduler.next_batch()
+    assert remainder.start_pos == 4
+    assert remainder.token_ids == second.prompt_ids[4:]
+    assert remainder.emits_logits
 
 
 def test_token_budget_accounts_for_piggybacked_decodes() -> None:
@@ -68,7 +73,11 @@ def test_token_budget_accounts_for_piggybacked_decodes() -> None:
     )
     first = _request("first", 8)
     scheduler.enqueue(first)
-    scheduler.next_batch()
+    while first.prompt_cursor < len(first.prompt_ids):
+        segment, = scheduler.next_batch()
+        assert segment.start_pos == first.prompt_cursor
+        assert len(segment.token_ids) == min(3, len(first.prompt_ids) - first.prompt_cursor)
+        first.prompt_cursor += len(segment.token_ids)
     first.state = RequestState.DECODING
     first.output_ids.append(100)
     second = _request("second", 8)

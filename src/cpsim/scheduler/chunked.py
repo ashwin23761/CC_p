@@ -34,7 +34,8 @@ class ChunkedScheduler(Scheduler):
             for request in self.active.values()
             if request.state == RequestState.DECODING
         ]
-        available = self.chunk_size
+        # Bound prefill work when a streaming request is waiting for its next token.
+        available = self.chunk_size if segments else self.max_seq_len
         if self.token_budget is not None:
             available = min(available, self.token_budget - len(segments))
         if available <= 0:

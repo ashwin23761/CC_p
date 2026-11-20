@@ -1,0 +1,2 @@
+seed,prompt_length,max_running,model,policy_variant,scheduler,chunk_size,request_count,mean_ttft,p50_ttft,p90_ttft,p99_ttft,p50_itl,p99_itl,max_itl,mean_end_to_end_latency,output_tokens_per_second,total_tokens_per_second,requests_per_second,makespan_seconds,iteration_count
+11,3072,4,Qwen/Qwen2.5-0.5B-Instruct,fixed256,chunked,256,12,28.321721851725005,27.998794181958374,49.90027567929229,55.27537994166555,0.47054010001011193,0.5142966998973861,0.5144182000076398,42.31851941839578,5.154975909990912,500.0326632691185,0.161092997187216,74.49113375210263,175
